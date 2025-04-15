@@ -1,5 +1,3 @@
-
-
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -21,6 +19,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/profile-photos', express.static(path.join(__dirname, 'profile-photos')));
 
 const usersDB = path.join(__dirname, 'users.json');
 const messagesDB = path.join(__dirname, 'messages.json');
@@ -33,16 +32,25 @@ const saveUsers = (users) => fs.writeFileSync(usersDB, JSON.stringify(users, nul
 const getMessages = () => JSON.parse(fs.readFileSync(messagesDB, 'utf8'));
 const saveMessages = (msgs) => fs.writeFileSync(messagesDB, JSON.stringify(msgs, null, 2));
 
-const storage = multer.diskStorage({
+const storageImage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, 'uploads/');
   },
   filename: function (req, file, cb) {
-    const uniqueName = Date.now() + '-' + file.originalname;
-    cb(null, uniqueName);
+    cb(null, Date.now() + '-' + file.originalname);
   }
 });
-const upload = multer({ storage: storage });
+const storageProfile = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'profile-photos/');
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+const upload = multer({ storage: storageImage });
+const uploadProfile = multer({ storage: storageProfile });
 
 let sockets = {};
 
@@ -58,37 +66,47 @@ io.on('connection', (socket) => {
     for (let uid in sockets) {
       if (sockets[uid] === socket.id) {
         delete sockets[uid];
-        console.log(`Disconnected: ${uid}`);
         break;
       }
     }
   });
 });
 
-app.post('/register', (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+// User registration with password and profile picture
+app.post('/register', uploadProfile.single('profilePhoto'), (req, res) => {
+  const { userId, password } = req.body;
+  if (!userId || !password || !req.file) return res.status(400).json({ error: 'Missing userId, password, or profilePhoto' });
 
   const users = getUsers();
   if (users[userId]) {
     return res.status(400).json({ error: 'User already exists' });
   }
 
-  users[userId] = { userId };
+  users[userId] = {
+    userId,
+    password,
+    profilePhoto: req.file.filename
+  };
+
   saveUsers(users);
-  res.json({ message: 'Registered successfully' });
+  res.json({ message: 'User registered successfully', profilePhoto: req.file.filename });
 });
 
+// Login with password
 app.post('/login', (req, res) => {
-  const { userId } = req.body;
+  const { userId, password } = req.body;
   const users = getUsers();
-  if (!users[userId]) return res.status(401).json({ error: 'User not found' });
-  res.json({ message: 'Login successful' });
+  const user = users[userId];
+  if (!user || user.password !== password) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  res.json({ message: 'Login successful', profilePhoto: user.profilePhoto });
 });
 
 app.get('/users', (req, res) => {
   const users = getUsers();
-  res.json(Object.keys(users));
+  const sanitized = Object.values(users).map(({ userId, profilePhoto }) => ({ userId, profilePhoto }));
+  res.json(sanitized);
 });
 
 app.get('/online-users', (req, res) => {
