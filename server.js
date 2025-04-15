@@ -21,10 +21,15 @@ app.use(express.static(__dirname));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const usersDB = path.join(__dirname, 'users.json');
+const messagesDB = path.join(__dirname, 'messages.json');
+
 if (!fs.existsSync(usersDB)) fs.writeFileSync(usersDB, JSON.stringify({}));
+if (!fs.existsSync(messagesDB)) fs.writeFileSync(messagesDB, JSON.stringify([]));
 
 const getUsers = () => JSON.parse(fs.readFileSync(usersDB, 'utf8'));
 const saveUsers = (users) => fs.writeFileSync(usersDB, JSON.stringify(users, null, 2));
+const getMessages = () => JSON.parse(fs.readFileSync(messagesDB, 'utf8'));
+const saveMessages = (msgs) => fs.writeFileSync(messagesDB, JSON.stringify(msgs, null, 2));
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -58,7 +63,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Register a new user
 app.post('/register', (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
@@ -73,7 +77,6 @@ app.post('/register', (req, res) => {
   res.json({ message: 'Registered successfully' });
 });
 
-// Login
 app.post('/login', (req, res) => {
   const { userId } = req.body;
   const users = getUsers();
@@ -81,25 +84,39 @@ app.post('/login', (req, res) => {
   res.json({ message: 'Login successful' });
 });
 
-// Get all user IDs
 app.get('/users', (req, res) => {
   const users = getUsers();
   res.json(Object.keys(users));
 });
 
-// Send image
+app.get('/online-users', (req, res) => {
+  res.json(Object.keys(sockets));
+});
+
+app.get('/images', (req, res) => {
+  res.json(getMessages());
+});
+
 app.post('/send-image', upload.single('file'), (req, res) => {
   try {
     const { userIDFrom, userIDTo } = req.body;
     const filename = req.file.filename;
     const url = `${BASE_URL}/uploads/${filename}`;
 
+    const msg = {
+      from: userIDFrom,
+      to: userIDTo,
+      url,
+      filename,
+      timestamp: Date.now()
+    };
+
+    const messages = getMessages();
+    messages.push(msg);
+    saveMessages(messages);
+
     if (sockets[userIDTo]) {
-      io.to(sockets[userIDTo]).emit('image', {
-        from: userIDFrom,
-        url: url,
-        filename: filename
-      });
+      io.to(sockets[userIDTo]).emit('image', msg);
     }
 
     res.json({ message: 'Image sent', to: userIDTo, url });

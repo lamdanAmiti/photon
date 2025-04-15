@@ -1,10 +1,46 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Image Server DB Test</title>
+  <title>Photon Dashboard</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
+    h2 { color: #333; }
+    .image-list img { max-height: 200px; margin: 10px; border: 2px solid #ccc; }
+    .image-entry { margin-bottom: 20px; }
+    .user-list { margin-top: 10px; background: #fff; padding: 10px; border-radius: 5px; }
+  </style>
 </head>
 <body>
-  <h2>Ready to Use With iOS App</h2>
-  <p>Visit <code>/users</code> to see registered users.</p>
+  <h2>📡 Online Users</h2>
+  <div id="onlineUsers" class="user-list"></div>
+
+  <h2>📷 Image Feed</h2>
+  <div class="image-list" id="imageFeed"></div>
+
+  <script>
+    async function loadOnlineUsers() {
+      const res = await fetch('/online-users');
+      const users = await res.json();
+      document.getElementById('onlineUsers').innerText = users.join(', ') || 'None';
+    }
+
+    async function loadImages() {
+      const res = await fetch('/images');
+      const images = await res.json();
+      const feed = document.getElementById('imageFeed');
+      feed.innerHTML = '';
+      images.reverse().forEach(img => {
+        const div = document.createElement('div');
+        div.className = 'image-entry';
+        div.innerHTML = `<strong>${img.from} → ${img.to}</strong><br><img src='${img.url}' />`;
+        feed.appendChild(div);
+      });
+    }
+
+    loadOnlineUsers();
+    loadImages();
+    setInterval(loadOnlineUsers, 5000);
+    setInterval(loadImages, 8000);
+  </script>
 </body>
 </html>
