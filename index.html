@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket Image Sharing UI Test</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+  <h2>Register User</h2>
+  <input id="userId" placeholder="Enter your userID" />
+  <button onclick="register()">Register</button>
+
+  <h2>Send Image</h2>
+  <input id="fromId" placeholder="Sender ID" />
+  <input id="toId" placeholder="Recipient ID" />
+  <input type="file" id="fileInput" />
+  <button onclick="sendImage()">Send Image</button>
+
+  <h2>Incoming Images</h2>
+  <div id="incoming"></div>
+
+  <script>
+    const socket = io("http://localhost:3000");
+
+    function register() {
+      const userId = document.getElementById('userId').value;
+      socket.emit("register", userId);
+      console.log("Registered as", userId);
+    }
+
+    socket.on("image", (data) => {
+      const div = document.getElementById('incoming');
+      const img = document.createElement('img');
+      img.src = data.url;
+      img.style.maxWidth = "200px";
+      div.appendChild(document.createElement('br'));
+      div.appendChild(document.createTextNode(`From ${data.from}:`));
+      div.appendChild(img);
+    });
+
+    async function sendImage() {
+      const fromId = document.getElementById('fromId').value;
+      const toId = document.getElementById('toId').value;
+      const fileInput = document.getElementById('fileInput');
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("userIDFrom", fromId);
+      formData.append("userIDTo", toId);
+
+      const res = await fetch("http://localhost:3000/send-image", {
+        method: "POST",
+        body: formData
+      });
+
+      const result = await res.json();
+      console.log("Sent:", result);
+    }
+  </script>
+</body>
+</html>
