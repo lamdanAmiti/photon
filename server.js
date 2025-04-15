@@ -9,14 +9,11 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: {
-    origin: "*", // You can restrict this to your frontend origin later
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`; // Set BASE_URL in production
+const BASE_URL = process.env.BASE_URL || ""; // Can be set in Render environment
 
 app.use(cors());
 app.use(express.json());
@@ -35,6 +32,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 let clients = {};
+const userFilePath = path.join(__dirname, 'users.txt');
 
 io.on('connection', (socket) => {
   console.log('New client connected');
@@ -42,11 +40,15 @@ io.on('connection', (socket) => {
   socket.on('register', (userId) => {
     clients[userId] = socket.id;
     console.log(`User ${userId} registered with socket ${socket.id}`);
+
+    // Append to file
+    fs.appendFileSync(userFilePath, `${new Date().toISOString()} - Registered: ${userId}\n`);
   });
 
   socket.on('disconnect', () => {
     for (const userId in clients) {
       if (clients[userId] === socket.id) {
+        fs.appendFileSync(userFilePath, `${new Date().toISOString()} - Disconnected: ${userId}\n`);
         delete clients[userId];
         break;
       }
@@ -56,21 +58,33 @@ io.on('connection', (socket) => {
 });
 
 app.post('/send-image', upload.single('file'), (req, res) => {
-  const { userIDFrom, userIDTo } = req.body;
-  const filename = req.file.filename;
-  const url = `${BASE_URL}/uploads/${filename}`;
+  try {
+    const { userIDFrom, userIDTo } = req.body;
+    const filename = req.file.filename;
+    const url = `${BASE_URL}/uploads/${filename}`;
 
-  if (clients[userIDTo]) {
-    io.to(clients[userIDTo]).emit('image', {
-      from: userIDFrom,
-      url: url,
-      filename: filename
-    });
+    if (clients[userIDTo]) {
+      io.to(clients[userIDTo]).emit('image', {
+        from: userIDFrom,
+        url: url,
+        filename: filename
+      });
+    }
+
+    res.json({ message: 'Image sent', to: userIDTo, url });
+  } catch (error) {
+    console.error("Upload error:", error);
+    res.status(500).json({ error: "Something went wrong" });
   }
+});
 
-  res.json({ message: 'Image sent', to: userIDTo, url });
+app.get('/logs', (req, res) => {
+  fs.readFile(userFilePath, 'utf8', (err, data) => {
+    if (err) return res.status(500).send("Could not read logs.");
+    res.type('text/plain').send(data);
+  });
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running on ${BASE_URL}`);
+  console.log(`Server running on port ${PORT}`);
 });

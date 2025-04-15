@@ -1,5 +1,5 @@
 {
-  "name": "socket-image-server-ui",
+  "name": "render-socket-image-server",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
