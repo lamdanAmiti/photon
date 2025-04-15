@@ -1,46 +1,101 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Photon Dashboard</title>
+  <title>Photon Admin Panel</title>
   <style>
     body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
-    h2 { color: #333; }
-    .image-list img { max-height: 200px; margin: 10px; border: 2px solid #ccc; }
-    .image-entry { margin-bottom: 20px; }
-    .user-list { margin-top: 10px; background: #fff; padding: 10px; border-radius: 5px; }
+    h2 { color: #222; }
+    .user-list, .image-grid { margin-top: 20px; }
+    .user-entry { cursor: pointer; padding: 8px; background: #fff; margin-bottom: 5px; border-radius: 5px; }
+    .user-entry:hover { background: #eef; }
+    .image-card { display: inline-block; margin: 10px; background: #fff; padding: 10px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .image-card img { max-height: 150px; display: block; margin-bottom: 8px; }
+    button { margin-left: 10px; }
+    input { margin-right: 5px; }
   </style>
 </head>
 <body>
-  <h2>📡 Online Users</h2>
-  <div id="onlineUsers" class="user-list"></div>
+  <h2>👤 User Management</h2>
+  <form id="createUserForm">
+    <input type="text" id="userId" placeholder="Username" required />
+    <input type="password" id="password" placeholder="Password" required />
+    <input type="file" id="profilePhoto" required />
+    <button type="submit">Create User</button>
+  </form>
+  <div id="users" class="user-list"></div>
 
-  <h2>📷 Image Feed</h2>
-  <div class="image-list" id="imageFeed"></div>
+  <h2>🖼️ Images Sent to <span id="selectedUserLabel">[None]</span></h2>
+  <div id="imageGrid" class="image-grid"></div>
 
   <script>
-    async function loadOnlineUsers() {
-      const res = await fetch('/online-users');
-      const users = await res.json();
-      document.getElementById('onlineUsers').innerText = users.join(', ') || 'None';
-    }
+    let selectedUser = null;
 
-    async function loadImages() {
-      const res = await fetch('/images');
-      const images = await res.json();
-      const feed = document.getElementById('imageFeed');
-      feed.innerHTML = '';
-      images.reverse().forEach(img => {
+    async function loadUsers() {
+      const res = await fetch('/users');
+      const users = await res.json();
+      const container = document.getElementById('users');
+      container.innerHTML = '';
+      users.forEach(user => {
         const div = document.createElement('div');
-        div.className = 'image-entry';
-        div.innerHTML = `<strong>${img.from} → ${img.to}</strong><br><img src='${img.url}' />`;
-        feed.appendChild(div);
+        div.className = 'user-entry';
+        div.innerHTML = `
+          <strong>${user.userId}</strong>
+          <img src="/profile-photos/${user.profilePhoto}" height="40" style="vertical-align:middle; margin-left: 10px;" />
+          <button onclick="deleteUser('${user.userId}')">🗑️</button>
+        `;
+        div.onclick = () => {
+          selectedUser = user.userId;
+          document.getElementById('selectedUserLabel').innerText = selectedUser;
+          loadImagesForUser(selectedUser);
+        };
+        container.appendChild(div);
       });
     }
 
-    loadOnlineUsers();
-    loadImages();
-    setInterval(loadOnlineUsers, 5000);
-    setInterval(loadImages, 8000);
+    async function loadImagesForUser(userId) {
+      const res = await fetch('/images');
+      const images = await res.json();
+      const grid = document.getElementById('imageGrid');
+      grid.innerHTML = '';
+      images.filter(img => img.to === userId).forEach(img => {
+        const div = document.createElement('div');
+        div.className = 'image-card';
+        div.innerHTML = `
+          <img src="${img.url}" />
+          <div><strong>From:</strong> ${img.from}</div>
+          <button onclick="deleteImage('${img.filename}')">Delete</button>
+        `;
+        grid.appendChild(div);
+      });
+    }
+
+    async function deleteImage(filename) {
+      await fetch('/delete-image/' + filename, { method: 'DELETE' });
+      if (selectedUser) loadImagesForUser(selectedUser);
+    }
+
+    async function deleteUser(userId) {
+      await fetch('/delete-user/' + userId, { method: 'DELETE' });
+      loadUsers();
+      if (userId === selectedUser) {
+        selectedUser = null;
+        document.getElementById('selectedUserLabel').innerText = '[None]';
+        document.getElementById('imageGrid').innerHTML = '';
+      }
+    }
+
+    document.getElementById('createUserForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData();
+      formData.append('userId', document.getElementById('userId').value);
+      formData.append('password', document.getElementById('password').value);
+      formData.append('profilePhoto', document.getElementById('profilePhoto').files[0]);
+      await fetch('/register', { method: 'POST', body: formData });
+      loadUsers();
+      e.target.reset();
+    };
+
+    loadUsers();
   </script>
 </body>
 </html>
