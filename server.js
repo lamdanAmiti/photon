@@ -9,15 +9,19 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: { origin: "*" }
+  cors: {
+    origin: "*", // You can restrict this to your frontend origin later
+    methods: ["GET", "POST"]
+  }
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`; // Set BASE_URL in production
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -54,7 +58,7 @@ io.on('connection', (socket) => {
 app.post('/send-image', upload.single('file'), (req, res) => {
   const { userIDFrom, userIDTo } = req.body;
   const filename = req.file.filename;
-  const url = `http://localhost:${PORT}/uploads/${filename}`;
+  const url = `${BASE_URL}/uploads/${filename}`;
 
   if (clients[userIDTo]) {
     io.to(clients[userIDTo]).emit('image', {
@@ -68,5 +72,5 @@ app.post('/send-image', upload.single('file'), (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Server running on ${BASE_URL}`);
 });
