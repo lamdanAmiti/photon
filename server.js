@@ -13,12 +13,18 @@ const io = socketIo(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || ""; // Can be set in Render environment
+const BASE_URL = process.env.BASE_URL || "https://photon-xz0s.onrender.com";
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+const usersDB = path.join(__dirname, 'users.json');
+if (!fs.existsSync(usersDB)) fs.writeFileSync(usersDB, JSON.stringify({}));
+
+const getUsers = () => JSON.parse(fs.readFileSync(usersDB, 'utf8'));
+const saveUsers = (users) => fs.writeFileSync(usersDB, JSON.stringify(users, null, 2));
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -31,40 +37,65 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-let clients = {};
-const userFilePath = path.join(__dirname, 'users.txt');
+let sockets = {};
 
 io.on('connection', (socket) => {
-  console.log('New client connected');
+  console.log('Client connected');
 
   socket.on('register', (userId) => {
-    clients[userId] = socket.id;
-    console.log(`User ${userId} registered with socket ${socket.id}`);
-
-    // Append to file
-    fs.appendFileSync(userFilePath, `${new Date().toISOString()} - Registered: ${userId}\n`);
+    sockets[userId] = socket.id;
+    console.log(`Registered user ${userId} with socket ${socket.id}`);
   });
 
   socket.on('disconnect', () => {
-    for (const userId in clients) {
-      if (clients[userId] === socket.id) {
-        fs.appendFileSync(userFilePath, `${new Date().toISOString()} - Disconnected: ${userId}\n`);
-        delete clients[userId];
+    for (let uid in sockets) {
+      if (sockets[uid] === socket.id) {
+        delete sockets[uid];
+        console.log(`Disconnected: ${uid}`);
         break;
       }
     }
-    console.log('Client disconnected');
   });
 });
 
+// Register a new user
+app.post('/register', (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+  const users = getUsers();
+  if (users[userId]) {
+    return res.status(400).json({ error: 'User already exists' });
+  }
+
+  users[userId] = { userId };
+  saveUsers(users);
+  res.json({ message: 'Registered successfully' });
+});
+
+// Login
+app.post('/login', (req, res) => {
+  const { userId } = req.body;
+  const users = getUsers();
+  if (!users[userId]) return res.status(401).json({ error: 'User not found' });
+  res.json({ message: 'Login successful' });
+});
+
+// Get all user IDs
+app.get('/users', (req, res) => {
+  const users = getUsers();
+  res.json(Object.keys(users));
+});
+
+// Send image
 app.post('/send-image', upload.single('file'), (req, res) => {
   try {
     const { userIDFrom, userIDTo } = req.body;
     const filename = req.file.filename;
     const url = `${BASE_URL}/uploads/${filename}`;
 
-    if (clients[userIDTo]) {
-      io.to(clients[userIDTo]).emit('image', {
+    if (sockets[userIDTo]) {
+      io.to(sockets[userIDTo]).emit('image', {
         from: userIDFrom,
         url: url,
         filename: filename
@@ -74,17 +105,10 @@ app.post('/send-image', upload.single('file'), (req, res) => {
     res.json({ message: 'Image sent', to: userIDTo, url });
   } catch (error) {
     console.error("Upload error:", error);
-    res.status(500).json({ error: "Something went wrong" });
+    res.status(500).json({ error: "Upload failed" });
   }
 });
 
-app.get('/logs', (req, res) => {
-  fs.readFile(userFilePath, 'utf8', (err, data) => {
-    if (err) return res.status(500).send("Could not read logs.");
-    res.type('text/plain').send(data);
-  });
-});
-
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on ${BASE_URL}`);
 });

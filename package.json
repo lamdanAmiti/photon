@@ -1,5 +1,5 @@
 {
-  "name": "render-socket-image-server",
+  "name": "render-image-server-with-db",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
