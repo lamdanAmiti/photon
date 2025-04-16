@@ -164,7 +164,6 @@ app.delete('/delete-user/:userId', (req, res) => {
   res.json({ message: 'User deleted' });
 });
 
-// Delete a specific image
 app.delete('/delete-image/:filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(__dirname, 'uploads', filename);
