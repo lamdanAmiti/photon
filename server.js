@@ -146,6 +146,36 @@ app.post('/send-image', upload.single('file'), (req, res) => {
   }
 });
 
+app.delete('/delete-user/:userId', (req, res) => {
+  const userId = req.params.userId;
+  const users = getUsers();
+  if (!users[userId]) return res.status(404).json({ error: 'User not found' });
+
+  const profilePic = users[userId].profilePhoto;
+  const profilePath = path.join(__dirname, 'profile-photos', profilePic);
+  if (fs.existsSync(profilePath)) fs.unlinkSync(profilePath);
+
+  delete users[userId];
+  saveUsers(users);
+
+  const messages = getMessages().filter(m => m.from !== userId && m.to !== userId);
+  saveMessages(messages);
+
+  res.json({ message: 'User deleted' });
+});
+
+// Delete a specific image
+app.delete('/delete-image/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(__dirname, 'uploads', filename);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+  const messages = getMessages().filter(m => m.filename !== filename);
+  saveMessages(messages);
+
+  res.json({ message: 'Image deleted' });
+});
+
 server.listen(PORT, () => {
   console.log(`Server running on ${BASE_URL}`);
 });
