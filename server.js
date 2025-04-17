@@ -73,6 +73,7 @@ let sockets = {}; // userId -> socketId
 let adminSockets = []; // Array of admin socket IDs
 let typing = {}; // userId -> {to: recipientId, text: currentText}
 let typingTimeouts = {}; // userId -> timeout
+let messageTransitions = {}; // Store typing transitions to sent messages
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -96,9 +97,9 @@ io.on('connection', (socket) => {
     socket.emit('online-users', Object.keys(sockets));
   });
 
-  // Live typing event
+  // Live typing event - enhanced for real-time character-by-character updates
   socket.on('typing', (data) => {
-    if (!data.from || !data.to || !data.text) return;
+    if (!data.from || !data.to || data.text === undefined) return;
     
     // Save typing state
     typing[data.from] = { to: data.to, text: data.text };
@@ -111,6 +112,24 @@ io.on('connection', (socket) => {
     // Set timeout to clear typing state after 2 seconds of inactivity
     typingTimeouts[data.from] = setTimeout(() => {
       delete typing[data.from];
+      
+      // Notify recipient that typing has stopped
+      if (sockets[data.to]) {
+        io.to(sockets[data.to]).emit('typing', {
+          from: data.from,
+          to: data.to,
+          text: ''
+        });
+      }
+      
+      // Also notify admins
+      adminSockets.forEach(socketId => {
+        io.to(socketId).emit('typing', {
+          from: data.from,
+          to: data.to,
+          text: ''
+        });
+      });
     }, 2000);
     
     // Forward typing event to recipient
@@ -124,19 +143,46 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Read receipt event
+  // Message transition event (when a message is being sent after typing)
+  socket.on('message-transition', (data) => {
+    if (!data.from || !data.to || !data.text || !data.typingId || !data.messageId) return;
+    
+    // Store the transition information
+    messageTransitions[data.typingId] = {
+      messageId: data.messageId,
+      text: data.text
+    };
+    
+    // Forward transition event to recipient
+    if (sockets[data.to]) {
+      io.to(sockets[data.to]).emit('message-transition', data);
+    }
+    
+    // Also forward to admins
+    adminSockets.forEach(socketId => {
+      io.to(socketId).emit('message-transition', data);
+    });
+  });
+  
+  // Read receipt event - optimized for real-time updates
   socket.on('read-receipt', (data) => {
     if (!data.messageId || !data.userId) return;
     
-    // Update the message as read in database
+    // Add timestamp for synchronization
+    const timestamp = Date.now();
+    data.timestamp = timestamp;
+    
+    // Update the message as read in database using a more efficient approach
     const messages = getTextMessages();
     const messageIndex = messages.findIndex(m => m.id === data.messageId);
     
     if (messageIndex !== -1) {
-      messages[messageIndex].readAt = Date.now();
+      messages[messageIndex].readAt = timestamp;
+      
+      // Only save to database after modifications
       saveTextMessages(messages);
       
-      // Notify sender
+      // Immediately notify sender
       const senderId = messages[messageIndex].from;
       if (sockets[senderId]) {
         io.to(sockets[senderId]).emit('read-receipt', data);
@@ -145,6 +191,59 @@ io.on('connection', (socket) => {
       // Notify admins
       adminSockets.forEach(socketId => {
         io.to(socketId).emit('read-receipt', data);
+      });
+    }
+  });
+
+  // Batch read receipts for multiple messages at once
+  socket.on('batch-read-receipts', (data) => {
+    if (!Array.isArray(data.messageIds) || !data.userId) return;
+    
+    const timestamp = Date.now();
+    const messages = getTextMessages();
+    let updated = false;
+    
+    // Prepare notifications for senders
+    const notifications = {}; // senderId -> messageIds[]
+    
+    data.messageIds.forEach(messageId => {
+      const messageIndex = messages.findIndex(m => m.id === messageId);
+      
+      if (messageIndex !== -1 && !messages[messageIndex].readAt) {
+        messages[messageIndex].readAt = timestamp;
+        updated = true;
+        
+        // Group by sender for efficient notifications
+        const senderId = messages[messageIndex].from;
+        if (!notifications[senderId]) {
+          notifications[senderId] = [];
+        }
+        notifications[senderId].push(messageId);
+      }
+    });
+    
+    // Save changes if any messages were updated
+    if (updated) {
+      saveTextMessages(messages);
+      
+      // Send batch notifications to each sender
+      Object.entries(notifications).forEach(([senderId, messageIds]) => {
+        if (sockets[senderId]) {
+          io.to(sockets[senderId]).emit('batch-read-receipts', {
+            messageIds,
+            userId: data.userId,
+            timestamp
+          });
+        }
+      });
+      
+      // Notify admins
+      adminSockets.forEach(socketId => {
+        io.to(socketId).emit('batch-read-receipts', {
+          messageIds: data.messageIds,
+          userId: data.userId,
+          timestamp
+        });
       });
     }
   });
@@ -290,7 +389,7 @@ app.post('/send-image', upload.single('file'), (req, res) => {
 // Send text message
 app.post('/send-message', (req, res) => {
   try {
-    const { from, to, text } = req.body;
+    const { from, to, text, typingId } = req.body;
     if (!from || !to || !text) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -302,7 +401,9 @@ app.post('/send-message', (req, res) => {
       text,
       timestamp: Date.now(),
       readAt: null,
-      delivered: true
+      delivered: true,
+      // Store typingId to connect with the typing message
+      typingId: typingId || null
     };
 
     const messages = getTextMessages();
@@ -318,9 +419,17 @@ app.post('/send-message', (req, res) => {
       }
     }
 
-    // Send to recipient
+    // Send to recipient with transition info if applicable
     if (sockets[to]) {
-      io.to(sockets[to]).emit('message', msg);
+      const messageData = { ...msg };
+      
+      // If this message was previously in typing state, include that info
+      if (typingId) {
+        messageData.isTransition = true;
+        messageData.typingId = typingId;
+      }
+      
+      io.to(sockets[to]).emit('message', messageData);
     }
     
     // Send to admins
