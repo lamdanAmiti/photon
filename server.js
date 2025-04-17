@@ -5,6 +5,7 @@ const fs = require('fs');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
@@ -23,14 +24,19 @@ app.use('/profile-photos', express.static(path.join(__dirname, 'profile-photos')
 
 const usersDB = path.join(__dirname, 'users.json');
 const messagesDB = path.join(__dirname, 'messages.json');
+const textMessagesDB = path.join(__dirname, 'text_messages.json');
 
+// Initialize database files if they don't exist
 if (!fs.existsSync(usersDB)) fs.writeFileSync(usersDB, JSON.stringify({}));
 if (!fs.existsSync(messagesDB)) fs.writeFileSync(messagesDB, JSON.stringify([]));
+if (!fs.existsSync(textMessagesDB)) fs.writeFileSync(textMessagesDB, JSON.stringify([]));
 
 const getUsers = () => JSON.parse(fs.readFileSync(usersDB, 'utf8'));
 const saveUsers = (users) => fs.writeFileSync(usersDB, JSON.stringify(users, null, 2));
 const getMessages = () => JSON.parse(fs.readFileSync(messagesDB, 'utf8'));
 const saveMessages = (msgs) => fs.writeFileSync(messagesDB, JSON.stringify(msgs, null, 2));
+const getTextMessages = () => JSON.parse(fs.readFileSync(textMessagesDB, 'utf8'));
+const saveTextMessages = (msgs) => fs.writeFileSync(textMessagesDB, JSON.stringify(msgs, null, 2));
 
 const storageImage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -146,6 +152,74 @@ app.post('/send-image', upload.single('file'), (req, res) => {
   }
 });
 
+// New endpoint for sending text messages
+app.post('/send-message', (req, res) => {
+  try {
+    const { from, to, text } = req.body;
+    
+    if (!from || !to || !text) {
+      return res.status(400).json({ error: 'Missing required fields: from, to, or text' });
+    }
+    
+    const messageId = uuidv4();
+    const timestamp = Date.now();
+    
+    const msg = {
+      id: messageId,
+      from,
+      to,
+      text,
+      timestamp
+    };
+    
+    const messages = getTextMessages();
+    messages.push(msg);
+    saveTextMessages(messages);
+    
+    // Send real-time message via socket if user is online
+    if (sockets[to]) {
+      io.to(sockets[to]).emit('message', msg);
+    }
+    
+    res.json({ 
+      message: 'Message sent', 
+      messageId,
+      to, 
+      timestamp
+    });
+  } catch (error) {
+    console.error("Message send error:", error);
+    res.status(500).json({ error: "Failed to send message" });
+  }
+});
+
+// Get message history between two users
+app.get('/message-history', (req, res) => {
+  try {
+    const { userId, otherId } = req.query;
+    
+    if (!userId || !otherId) {
+      return res.status(400).json({ error: 'Missing required query parameters: userId or otherId' });
+    }
+    
+    const messages = getTextMessages();
+    
+    // Filter messages that involve both users
+    const relevantMessages = messages.filter(msg => 
+      (msg.from === userId && msg.to === otherId) || 
+      (msg.from === otherId && msg.to === userId)
+    );
+    
+    // Sort by timestamp (oldest first)
+    relevantMessages.sort((a, b) => a.timestamp - b.timestamp);
+    
+    res.json(relevantMessages);
+  } catch (error) {
+    console.error("Message history fetch error:", error);
+    res.status(500).json({ error: "Failed to fetch message history" });
+  }
+});
+
 app.delete('/delete-user/:userId', (req, res) => {
   const userId = req.params.userId;
   const users = getUsers();
@@ -160,6 +234,10 @@ app.delete('/delete-user/:userId', (req, res) => {
 
   const messages = getMessages().filter(m => m.from !== userId && m.to !== userId);
   saveMessages(messages);
+  
+  // Also remove text messages
+  const textMessages = getTextMessages().filter(m => m.from !== userId && m.to !== userId);
+  saveTextMessages(textMessages);
 
   res.json({ message: 'User deleted' });
 });
@@ -173,6 +251,21 @@ app.delete('/delete-image/:filename', (req, res) => {
   saveMessages(messages);
 
   res.json({ message: 'Image deleted' });
+});
+
+// Delete a text message
+app.delete('/delete-message/:messageId', (req, res) => {
+  const messageId = req.params.messageId;
+  
+  const messages = getTextMessages();
+  const filteredMessages = messages.filter(m => m.id !== messageId);
+  
+  if (messages.length === filteredMessages.length) {
+    return res.status(404).json({ error: 'Message not found' });
+  }
+  
+  saveTextMessages(filteredMessages);
+  res.json({ message: 'Message deleted' });
 });
 
 server.listen(PORT, () => {
