@@ -148,4 +148,466 @@
     <div class="tab active" onclick="switchTab('dashboard')">Dashboard</div>
     <div class="tab" onclick="switchTab('users')">Users</div>
     <div class="tab" onclick="switchTab('messages')">Messages</div>
-    <div class="tab" onclick="switchT
+    <div class="tab" onclick="switchTab('images')">Images</div>
+  </div>
+  
+  <div id="dashboard-tab" class="tab-content">
+    <h2>Dashboard</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div>Total Users</div>
+        <div class="stat-number" id="total-users">0</div>
+      </div>
+      <div class="stat-card">
+        <div>Online Users</div>
+        <div class="stat-number" id="online-users">0</div>
+      </div>
+      <div class="stat-card">
+        <div>Total Messages</div>
+        <div class="stat-number" id="total-messages">0</div>
+      </div>
+      <div class="stat-card">
+        <div>Total Images</div>
+        <div class="stat-number" id="total-images">0</div>
+      </div>
+    </div>
+    
+    <h3>Recent Activity</h3>
+    <div id="recent-activity" class="messages-container"></div>
+  </div>
+  
+  <div id="users-tab" class="tab-content" style="display: none;">
+    <h2>👤 User Management</h2>
+    <form id="createUserForm">
+      <input type="text" id="userId" placeholder="Username" required />
+      <input type="password" id="password" placeholder="Password" required />
+      <input type="file" id="profilePhoto" required />
+      <button type="submit">Create User</button>
+    </form>
+    <div id="users" class="user-list"></div>
+  </div>
+  
+  <div id="messages-tab" class="tab-content" style="display: none;">
+    <h2>💬 Message Monitor</h2>
+    
+    <div style="display: flex; margin-bottom: 15px;">
+      <div style="flex: 1; margin-right: 15px;">
+        <h3>Conversations</h3>
+        <select id="conversation-filter" onchange="filterConversations()">
+          <option value="all">All Conversations</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="week">This Week</option>
+        </select>
+        <div id="conversation-list" class="conversation-list"></div>
+      </div>
+      
+      <div style="flex: 2;">
+        <div class="message-header">
+          <h3>Messages between <span id="conversation-title">-</span></h3>
+          <div id="typing-indicator" class="typing-indicator"></div>
+        </div>
+        <div id="messages-container" class="messages-container"></div>
+      </div>
+    </div>
+  </div>
+  
+  <div id="images-tab" class="tab-content" style="display: none;">
+    <h2>🖼️ Images Sent to <span id="selectedUserLabel">[None]</span></h2>
+    <div id="imageGrid" class="image-grid"></div>
+  </div>
+  
+  <script>
+    // Global variables
+    let selectedUser = null;
+    let selectedConversation = null;
+    let onlineUsers = [];
+    let socket;
+    
+    // Initialize Socket.IO connection
+    function initializeSocket() {
+      socket = io();
+      
+      socket.on('connect', () => {
+        console.log('Admin connected to server');
+        // Register as admin
+        socket.emit('register-admin');
+      });
+      
+      socket.on('typing', (data) => {
+        if (selectedConversation && 
+            ((data.from === selectedConversation.user1 && data.to === selectedConversation.user2) ||
+             (data.from === selectedConversation.user2 && data.to === selectedConversation.user1))) {
+          document.getElementById('typing-indicator').innerText = `${data.from} is typing: ${data.text}`;
+          
+          // Clear typing indicator after 2 seconds of no typing
+          clearTimeout(window.typingTimeout);
+          window.typingTimeout = setTimeout(() => {
+            document.getElementById('typing-indicator').innerText = '';
+          }, 2000);
+        }
+      });
+      
+      socket.on('message', (msg) => {
+        // Update conversation list
+        loadConversations();
+        
+        // If the current conversation is open, add the message
+        if (selectedConversation && 
+            ((msg.from === selectedConversation.user1 && msg.to === selectedConversation.user2) ||
+             (msg.from === selectedConversation.user2 && msg.to === selectedConversation.user1))) {
+          addMessageToContainer(msg);
+        }
+        
+        // Add to recent activity
+        addToRecentActivity(`New message from ${msg.from} to ${msg.to}: ${msg.text}`);
+      });
+      
+      socket.on('image', (msg) => {
+        // Update image grid if needed
+        if (selectedUser === msg.to) {
+          loadImagesForUser(selectedUser);
+        }
+        
+        // Add to recent activity
+        addToRecentActivity(`New image from ${msg.from} to ${msg.to}`);
+      });
+      
+      socket.on('read-receipt', (data) => {
+        // Update read status of messages in the UI
+        updateReadStatus(data.messageId, data.userId);
+      });
+      
+      socket.on('online-users', (users) => {
+        onlineUsers = users;
+        document.getElementById('online-users').innerText = users.length;
+        
+        // Update online indicators
+        const userEntries = document.querySelectorAll('.user-entry');
+        userEntries.forEach(entry => {
+          const userId = entry.getAttribute('data-user-id');
+          const statusIndicator = entry.querySelector('.online-status');
+          if (statusIndicator) {
+            statusIndicator.classList.remove('online', 'offline');
+            statusIndicator.classList.add(onlineUsers.includes(userId) ? 'online' : 'offline');
+          }
+        });
+      });
+    }
+    
+    // Dashboard functions
+    function loadDashboardStats() {
+      fetch('/admin/stats')
+        .then(res => res.json())
+        .then(stats => {
+          document.getElementById('total-users').innerText = stats.totalUsers;
+          document.getElementById('total-messages').innerText = stats.totalMessages;
+          document.getElementById('total-images').innerText = stats.totalImages;
+        });
+      
+      fetch('/online-users')
+        .then(res => res.json())
+        .then(users => {
+          document.getElementById('online-users').innerText = users.length;
+        });
+    }
+    
+    function addToRecentActivity(message) {
+      const container = document.getElementById('recent-activity');
+      const div = document.createElement('div');
+      const now = new Date();
+      div.innerHTML = `<strong>${now.toLocaleTimeString()}</strong>: ${message}`;
+      container.insertBefore(div, container.firstChild);
+      
+      // Limit to 20 recent activities
+      if (container.children.length > 20) {
+        container.removeChild(container.lastChild);
+      }
+    }
+    
+    // User management functions
+    async function loadUsers() {
+      const res = await fetch('/users');
+      const users = await res.json();
+      const container = document.getElementById('users');
+      container.innerHTML = '';
+      
+      users.forEach(user => {
+        const div = document.createElement('div');
+        div.className = 'user-entry';
+        div.setAttribute('data-user-id', user.userId);
+        
+        if (selectedUser === user.userId) {
+          div.classList.add('selected');
+        }
+        
+        const isOnline = onlineUsers.includes(user.userId);
+        
+        div.innerHTML = `
+          <span class="online-status ${isOnline ? 'online' : 'offline'}"></span>
+          <strong>${user.userId}</strong>
+          <img src="/profile-photos/${user.profilePhoto}" height="40" style="vertical-align:middle; margin-left: 10px;" />
+          <button class="delete" onclick="deleteUser('${user.userId}')">🗑️</button>
+        `;
+        
+        div.onclick = (e) => {
+          if (e.target.tagName !== 'BUTTON') {
+            selectedUser = user.userId;
+            document.getElementById('selectedUserLabel').innerText = selectedUser;
+            
+            // Update selected class
+            document.querySelectorAll('.user-entry').forEach(el => {
+              el.classList.remove('selected');
+            });
+            div.classList.add('selected');
+            
+            loadImagesForUser(selectedUser);
+            switchTab('images');
+          }
+        };
+        
+        container.appendChild(div);
+      });
+    }
+    
+    async function deleteUser(userId) {
+      if (confirm(`Are you sure you want to delete ${userId}?`)) {
+        await fetch('/delete-user/' + userId, { method: 'DELETE' });
+        loadUsers();
+        loadConversations();
+        loadDashboardStats();
+        
+        if (userId === selectedUser) {
+          selectedUser = null;
+          document.getElementById('selectedUserLabel').innerText = '[None]';
+          document.getElementById('imageGrid').innerHTML = '';
+        }
+      }
+    }
+    
+    // Message monitoring functions
+    async function loadConversations() {
+      const res = await fetch('/admin/conversations');
+      const conversations = await res.json();
+      const container = document.getElementById('conversation-list');
+      container.innerHTML = '';
+      
+      const filter = document.getElementById('conversation-filter').value;
+      const filteredConversations = filterConversationsByTime(conversations, filter);
+      
+      filteredConversations.forEach(conv => {
+        const div = document.createElement('div');
+        div.className = 'user-entry';
+        
+        if (selectedConversation && 
+            selectedConversation.user1 === conv.user1 && 
+            selectedConversation.user2 === conv.user2) {
+          div.classList.add('selected');
+        }
+        
+        const unreadCount = conv.unreadCount || 0;
+        const badgeHtml = unreadCount > 0 ? `<span class="badge">${unreadCount}</span>` : '';
+        
+        div.innerHTML = `
+          <strong>${conv.user1}</strong> ↔️ <strong>${conv.user2}</strong>
+          ${badgeHtml}
+          <div class="message-info">Last message: ${new Date(conv.lastMessageTime).toLocaleString()}</div>
+        `;
+        
+        div.onclick = () => {
+          selectedConversation = conv;
+          document.getElementById('conversation-title').innerText = `${conv.user1} and ${conv.user2}`;
+          
+          // Update selected class
+          document.querySelectorAll('#conversation-list .user-entry').forEach(el => {
+            el.classList.remove('selected');
+          });
+          div.classList.add('selected');
+          
+          loadMessages(conv.user1, conv.user2);
+        };
+        
+        container.appendChild(div);
+      });
+    }
+    
+    function filterConversationsByTime(conversations, filter) {
+      if (filter === 'all') return conversations;
+      
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      
+      return conversations.filter(conv => {
+        const lastMessageDate = new Date(conv.lastMessageTime);
+        
+        switch(filter) {
+          case 'today':
+            return lastMessageDate >= today;
+          case 'yesterday':
+            return lastMessageDate >= yesterday && lastMessageDate < today;
+          case 'week':
+            return lastMessageDate >= weekAgo;
+          default:
+            return true;
+        }
+      });
+    }
+    
+    function filterConversations() {
+      loadConversations();
+    }
+    
+    async function loadMessages(user1, user2) {
+      const res = await fetch(`/admin/messages?user1=${user1}&user2=${user2}`);
+      const messages = await res.json();
+      const container = document.getElementById('messages-container');
+      container.innerHTML = '';
+      
+      messages.forEach(msg => {
+        addMessageToContainer(msg);
+      });
+      
+      // Scroll to bottom
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    function addMessageToContainer(msg) {
+      const container = document.getElementById('messages-container');
+      const div = document.createElement('div');
+      
+      div.className = `message-bubble message-${msg.from === selectedConversation.user1 ? 'sender' : 'receiver'}`;
+      div.setAttribute('data-message-id', msg.id);
+      
+      const readStatus = msg.readAt ? 
+        `Read at ${new Date(msg.readAt).toLocaleTimeString()}` : 
+        'Delivered';
+      
+      div.innerHTML = `
+        <div><strong>${msg.from}:</strong> ${msg.text}</div>
+        <div class="message-info">
+          ${new Date(msg.timestamp).toLocaleString()}
+          <span class="read-status">${readStatus}</span>
+        </div>
+      `;
+      
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    function updateReadStatus(messageId, userId) {
+      const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (messageEl) {
+        const readStatusEl = messageEl.querySelector('.read-status');
+        if (readStatusEl) {
+          readStatusEl.innerText = `Read at ${new Date().toLocaleTimeString()} by ${userId}`;
+        }
+      }
+    }
+    
+    // Image management functions
+    async function loadImagesForUser(userId) {
+      const res = await fetch('/images');
+      const images = await res.json();
+      const grid = document.getElementById('imageGrid');
+      grid.innerHTML = '';
+      
+      images.filter(img => img.to === userId).forEach(img => {
+        const div = document.createElement('div');
+        div.className = 'image-card';
+        div.innerHTML = `
+          <img src="${img.url}" />
+          <div><strong>From:</strong> ${img.from}</div>
+          <div><strong>Sent:</strong> ${new Date(img.timestamp).toLocaleString()}</div>
+          <button class="delete" onclick="deleteImage('${img.filename}')">Delete</button>
+        `;
+        grid.appendChild(div);
+      });
+      
+      if (images.filter(img => img.to === userId).length === 0) {
+        grid.innerHTML = '<p>No images found for this user.</p>';
+      }
+    }
+    
+    async function deleteImage(filename) {
+      if (confirm('Are you sure you want to delete this image?')) {
+        await fetch('/delete-image/' + filename, { method: 'DELETE' });
+        if (selectedUser) loadImagesForUser(selectedUser);
+        loadDashboardStats();
+      }
+    }
+    
+    // Tab switching
+    function switchTab(tabName) {
+      // Hide all tab contents
+      document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.style.display = 'none';
+      });
+      
+      // Show the selected tab
+      document.getElementById(`${tabName}-tab`).style.display = 'block';
+      
+      // Update active class on tabs
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+      
+      // Load data for the active tab
+      if (tabName === 'dashboard') {
+        loadDashboardStats();
+      } else if (tabName === 'users') {
+        loadUsers();
+      } else if (tabName === 'messages') {
+        loadConversations();
+      } else if (tabName === 'images' && selectedUser) {
+        loadImagesForUser(selectedUser);
+      }
+    }
+    
+    // Form submission
+    document.getElementById('createUserForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const formData = new FormData();
+      formData.append('userId', document.getElementById('userId').value);
+      formData.append('password', document.getElementById('password').value);
+      formData.append('profilePhoto', document.getElementById('profilePhoto').files[0]);
+      
+      try {
+        const response = await fetch('/register', { method: 'POST', body: formData });
+        const result = await response.json();
+        
+        if (result.error) {
+          alert(`Error: ${result.error}`);
+        } else {
+          loadUsers();
+          loadDashboardStats();
+          e.target.reset();
+        }
+      } catch (error) {
+        alert(`Error: ${error.message}`);
+      }
+    };
+    
+    // Initialize
+    initializeSocket();
+    loadDashboardStats();
+    loadUsers();
+    switchTab('dashboard');
+    
+    // Refresh data periodically
+    setInterval(() => {
+      loadDashboardStats();
+      loadUsers();
+      if (document.getElementById('messages-tab').style.display !== 'none') {
+        loadConversations();
+      }
+    }, 30000);
+  </script>
+  
+  <script src="/socket.io/socket.io.js"></script>
+</body>
+</html>
