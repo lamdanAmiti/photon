@@ -164,7 +164,7 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Message status update handler (delivered/read)
+  // New handler for message status updates
   socket.on('message-status', (data) => {
     if (!data.id) return;
     
@@ -366,7 +366,7 @@ app.post('/send-message', (req, res) => {
       to,
       text,
       timestamp: Date.now()
-      // Note: No readAt or delivered fields initially
+      // No delivered or readAt initially - these will be added by message-status events
     };
 
     const messages = getTextMessages();
