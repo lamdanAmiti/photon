@@ -97,7 +97,7 @@ io.on('connection', (socket) => {
     socket.emit('online-users', Object.keys(sockets));
   });
 
-  // Live typing event - enhanced for real-time character-by-character updates
+  // Live typing event
   socket.on('typing', (data) => {
     if (!data.from || !data.to || data.text === undefined) return;
     
@@ -143,7 +143,7 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Message transition event (when a message is being sent after typing)
+  // Message transition event
   socket.on('message-transition', (data) => {
     if (!data.from || !data.to || !data.text || !data.typingId || !data.messageId) return;
     
@@ -164,7 +164,7 @@ io.on('connection', (socket) => {
     });
   });
   
-  // New handler for message status updates
+  // Message status update handler (NEW FORMAT)
   socket.on('message-status', (data) => {
     if (!data.id) return;
     
@@ -172,7 +172,7 @@ io.on('connection', (socket) => {
     const delivered = data.delivered === true;
     const readAt = data.readAt;
     
-    console.log(`Received message status update for ${messageId}: delivered=${delivered}, readAt=${readAt || 'null'}`);
+    console.log(`Received message status update: id=${messageId}, delivered=${delivered}, readAt=${readAt || 'null'}`);
     
     // Find the message in the database
     const messages = getTextMessages();
@@ -212,6 +212,38 @@ io.on('connection', (socket) => {
         });
       });
     }
+  });
+  
+  // Handle legacy read receipt format (for backward compatibility)
+  socket.on('read-receipt', (data) => {
+    if (!data.messageId) return;
+    
+    // Convert to the new message-status format
+    const messageId = data.messageId;
+    const timestamp = Date.now();
+    
+    // Use the new handler with converted data
+    socket.emit('message-status', {
+      id: messageId,
+      delivered: true,
+      readAt: timestamp
+    });
+  });
+  
+  // Handle legacy batch read receipts (for backward compatibility)
+  socket.on('batch-read-receipts', (data) => {
+    if (!Array.isArray(data.messageIds)) return;
+    
+    const timestamp = Date.now();
+    
+    // Convert each message ID to the new format
+    data.messageIds.forEach(messageId => {
+      socket.emit('message-status', {
+        id: messageId,
+        delivered: true,
+        readAt: timestamp
+      });
+    });
   });
 
   socket.on('disconnect', () => {
@@ -285,19 +317,6 @@ app.post('/login', (req, res) => {
   res.json({ message: 'Login successful', profilePhoto: user.profilePhoto });
 });
 
-// Admin login with password
-app.post('/admin/login', (req, res) => {
-  const { username, password } = req.body;
-  
-  // In a real application, you would have more secure admin authentication
-  // For simplicity, we're using a basic static check
-  if (username === 'admin' && password === 'admin123') {
-    res.json({ message: 'Admin login successful' });
-  } else {
-    res.status(401).json({ error: 'Invalid admin credentials' });
-  }
-});
-
 // Get all users (for favorites selection)
 app.get('/users', (req, res) => {
   const users = getUsers();
@@ -352,7 +371,7 @@ app.post('/send-image', upload.single('file'), (req, res) => {
   }
 });
 
-// Send text message - updated to not include readAt or delivered initially
+// Send text message - no readAt or delivered initially
 app.post('/send-message', (req, res) => {
   try {
     const { from, to, text, typingId } = req.body;
@@ -360,13 +379,14 @@ app.post('/send-message', (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    const msgId = Date.now().toString();
     const msg = {
-      id: Date.now().toString(),
+      id: msgId,
       from,
       to,
       text,
       timestamp: Date.now()
-      // No delivered or readAt initially - these will be added by message-status events
+      // No delivered or readAt initially
     };
 
     const messages = getTextMessages();
@@ -400,7 +420,7 @@ app.post('/send-message', (req, res) => {
       io.to(socketId).emit('message', msg);
     });
 
-    res.json({ message: 'Message sent', id: msg.id });
+    res.json({ message: 'Message sent', id: msgId });
   } catch (error) {
     console.error("Message send error:", error);
     res.status(500).json({ error: "Failed to send message" });
@@ -425,114 +445,6 @@ app.get('/message-history', (req, res) => {
     console.error("Message history error:", error);
     res.status(500).json({ error: "Failed to retrieve message history" });
   }
-});
-
-// Delete user
-app.delete('/delete-user/:userId', (req, res) => {
-  const userId = req.params.userId;
-  const users = getUsers();
-  if (!users[userId]) return res.status(404).json({ error: 'User not found' });
-
-  const profilePic = users[userId].profilePhoto;
-  const profilePath = path.join(__dirname, 'profile-photos', profilePic);
-  if (fs.existsSync(profilePath)) fs.unlinkSync(profilePath);
-
-  delete users[userId];
-  saveUsers(users);
-
-  const messages = getMessages().filter(m => m.from !== userId && m.to !== userId);
-  saveMessages(messages);
-  
-  const textMessages = getTextMessages().filter(m => m.from !== userId && m.to !== userId);
-  saveTextMessages(textMessages);
-
-  res.json({ message: 'User deleted' });
-});
-
-// Delete image
-app.delete('/delete-image/:filename', (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, 'uploads', filename);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
-  const messages = getMessages().filter(m => m.filename !== filename);
-  saveMessages(messages);
-
-  res.json({ message: 'Image deleted' });
-});
-
-// ADMIN API ENDPOINTS
-
-// Get dashboard stats
-app.get('/admin/stats', (req, res) => {
-  const users = getUsers();
-  const textMessages = getTextMessages();
-  const imageMessages = getMessages();
-  
-  const stats = {
-    totalUsers: Object.keys(users).length,
-    totalMessages: textMessages.length,
-    totalImages: imageMessages.length,
-    lastUpdated: Date.now()
-  };
-  
-  res.json(stats);
-});
-
-// Get conversations for admin panel
-app.get('/admin/conversations', (req, res) => {
-  const textMessages = getTextMessages();
-  const conversations = {};
-  
-  textMessages.forEach(msg => {
-    // Create a unique key for each conversation pair, sorted alphabetically
-    const user1 = msg.from < msg.to ? msg.from : msg.to;
-    const user2 = msg.from < msg.to ? msg.to : msg.from;
-    const key = `${user1}-${user2}`;
-    
-    if (!conversations[key]) {
-      conversations[key] = {
-        user1,
-        user2,
-        lastMessageTime: msg.timestamp,
-        unreadCount: !msg.readAt ? 1 : 0
-      };
-    } else {
-      // Update last message time if this message is newer
-      if (msg.timestamp > conversations[key].lastMessageTime) {
-        conversations[key].lastMessageTime = msg.timestamp;
-      }
-      
-      // Count unread messages
-      if (!msg.readAt) {
-        conversations[key].unreadCount = (conversations[key].unreadCount || 0) + 1;
-      }
-    }
-  });
-  
-  // Convert to array and sort by latest message
-  const result = Object.values(conversations).sort((a, b) => b.lastMessageTime - a.lastMessageTime);
-  res.json(result);
-});
-
-// Get messages between two users for admin panel
-app.get('/admin/messages', (req, res) => {
-  const { user1, user2 } = req.query;
-  if (!user1 || !user2) {
-    return res.status(400).json({ error: 'Missing required parameters' });
-  }
-  
-  const messages = getTextMessages().filter(msg => 
-    (msg.from === user1 && msg.to === user2) || 
-    (msg.from === user2 && msg.to === user1)
-  ).sort((a, b) => a.timestamp - b.timestamp);
-  
-  res.json(messages);
-});
-
-// Serve admin panel
-app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // Start the server
