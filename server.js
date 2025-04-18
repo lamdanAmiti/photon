@@ -164,85 +164,51 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Read receipt event - optimized for real-time updates
-  socket.on('read-receipt', (data) => {
-    if (!data.messageId || !data.userId) return;
+  // Message status update handler (delivered/read)
+  socket.on('message-status', (data) => {
+    if (!data.id) return;
     
-    // Add timestamp for synchronization
-    const timestamp = Date.now();
-    data.timestamp = timestamp;
+    const messageId = data.id;
+    const delivered = data.delivered === true;
+    const readAt = data.readAt;
     
-    // Update the message as read in database using a more efficient approach
+    console.log(`Received message status update for ${messageId}: delivered=${delivered}, readAt=${readAt || 'null'}`);
+    
+    // Find the message in the database
     const messages = getTextMessages();
-    const messageIndex = messages.findIndex(m => m.id === data.messageId);
+    const messageIndex = messages.findIndex(m => m.id === messageId);
     
     if (messageIndex !== -1) {
-      messages[messageIndex].readAt = timestamp;
+      const message = messages[messageIndex];
       
-      // Only save to database after modifications
+      // Update message status
+      if (delivered) {
+        message.delivered = true;
+      }
+      
+      if (readAt) {
+        message.readAt = readAt;
+      }
+      
+      // Save to database
       saveTextMessages(messages);
       
-      // Immediately notify sender
-      const senderId = messages[messageIndex].from;
+      // Notify the sender of the message
+      const senderId = message.from;
       if (sockets[senderId]) {
-        io.to(sockets[senderId]).emit('read-receipt', data);
+        io.to(sockets[senderId]).emit('message-status', {
+          id: messageId,
+          delivered: message.delivered,
+          readAt: message.readAt
+        });
       }
       
-      // Notify admins
+      // Also notify admins
       adminSockets.forEach(socketId => {
-        io.to(socketId).emit('read-receipt', data);
-      });
-    }
-  });
-
-  // Batch read receipts for multiple messages at once
-  socket.on('batch-read-receipts', (data) => {
-    if (!Array.isArray(data.messageIds) || !data.userId) return;
-    
-    const timestamp = Date.now();
-    const messages = getTextMessages();
-    let updated = false;
-    
-    // Prepare notifications for senders
-    const notifications = {}; // senderId -> messageIds[]
-    
-    data.messageIds.forEach(messageId => {
-      const messageIndex = messages.findIndex(m => m.id === messageId);
-      
-      if (messageIndex !== -1 && !messages[messageIndex].readAt) {
-        messages[messageIndex].readAt = timestamp;
-        updated = true;
-        
-        // Group by sender for efficient notifications
-        const senderId = messages[messageIndex].from;
-        if (!notifications[senderId]) {
-          notifications[senderId] = [];
-        }
-        notifications[senderId].push(messageId);
-      }
-    });
-    
-    // Save changes if any messages were updated
-    if (updated) {
-      saveTextMessages(messages);
-      
-      // Send batch notifications to each sender
-      Object.entries(notifications).forEach(([senderId, messageIds]) => {
-        if (sockets[senderId]) {
-          io.to(sockets[senderId]).emit('batch-read-receipts', {
-            messageIds,
-            userId: data.userId,
-            timestamp
-          });
-        }
-      });
-      
-      // Notify admins
-      adminSockets.forEach(socketId => {
-        io.to(socketId).emit('batch-read-receipts', {
-          messageIds: data.messageIds,
-          userId: data.userId,
-          timestamp
+        io.to(socketId).emit('message-status', {
+          id: messageId,
+          delivered: message.delivered,
+          readAt: message.readAt
         });
       });
     }
@@ -386,7 +352,7 @@ app.post('/send-image', upload.single('file'), (req, res) => {
   }
 });
 
-// Send text message
+// Send text message - updated to not include readAt or delivered initially
 app.post('/send-message', (req, res) => {
   try {
     const { from, to, text, typingId } = req.body;
@@ -399,11 +365,8 @@ app.post('/send-message', (req, res) => {
       from,
       to,
       text,
-      timestamp: Date.now(),
-      readAt: null,
-      delivered: true,
-      // Store typingId to connect with the typing message
-      typingId: typingId || null
+      timestamp: Date.now()
+      // Note: No readAt or delivered fields initially
     };
 
     const messages = getTextMessages();
