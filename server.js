@@ -334,6 +334,68 @@ app.get('/images', (req, res) => {
   res.json(getMessages());
 });
 
+// Get received images
+app.get('/images/received', (req, res) => {
+  try {
+    const { userId, from } = req.query;
+    if (!userId || !from) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    const messages = getMessages().filter(msg => 
+      msg.to === userId && msg.from === from
+    ).sort((a, b) => a.timestamp - b.timestamp);
+
+    // Return array of image URLs
+    const imageUrls = messages.map(msg => msg.url);
+    res.json(imageUrls);
+  } catch (error) {
+    console.error("Get received images error:", error);
+    res.status(500).json({ error: "Failed to retrieve received images" });
+  }
+});
+
+// Get sent images
+app.get('/images/sent', (req, res) => {
+  try {
+    const { userId, to } = req.query;
+    if (!userId || !to) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    const messages = getMessages().filter(msg => 
+      msg.from === userId && msg.to === to
+    ).sort((a, b) => a.timestamp - b.timestamp);
+
+    // Return array of image URLs
+    const imageUrls = messages.map(msg => msg.url);
+    res.json(imageUrls);
+  } catch (error) {
+    console.error("Get sent images error:", error);
+    res.status(500).json({ error: "Failed to retrieve sent images" });
+  }
+});
+
+// Get all image history for two users (both sent and received)
+app.get('/images/history', (req, res) => {
+  try {
+    const { userId, otherId } = req.query;
+    if (!userId || !otherId) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    const messages = getMessages().filter(msg => 
+      (msg.from === userId && msg.to === otherId) || 
+      (msg.from === otherId && msg.to === userId)
+    ).sort((a, b) => a.timestamp - b.timestamp);
+
+    res.json(messages);
+  } catch (error) {
+    console.error("Image history error:", error);
+    res.status(500).json({ error: "Failed to retrieve image history" });
+  }
+});
+
 // Send image
 app.post('/send-image', upload.single('file'), (req, res) => {
   try {
